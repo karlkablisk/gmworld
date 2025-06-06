@@ -240,7 +240,8 @@ else:
     scene = st.session_state.scenes[sel_scene].copy()
 
 scene["name"]   = st.sidebar.text_input("Scene name", scene["name"])
-scene["prompt"] = st.sidebar.text_area("Scene description", scene["prompt"], height=60)
+scene["prompt"] = st.sidebar.text_area("Scene description", scene.get("prompt") or "", height=70)
+
 # Image
 scene["image"]  = st.sidebar.text_input("Image path", scene.get("image", ""))
 if scene["image"] and Path(scene["image"]).exists():
@@ -319,8 +320,8 @@ if st.sidebar.button("Generate char image"):
     ok = generate_image(img_p, c["image"] or f"{c['name']}_char.png")
     st.toast("Generated" if ok else "Failed")
 c["personality"]   = st.sidebar.text_area("Personality", c["personality"], height=100)
-c["prompt_tweak"]  = st.sidebar.text_area("Prompt tweak", c["prompt_tweak"], height=50)
-c["develop"]       = st.sidebar.text_area("Develop", c["develop"], height=60)
+c["prompt_tweak"]  = st.sidebar.text_area("Prompt tweak", c["prompt_tweak"], height=70)
+c["develop"]       = st.sidebar.text_area("Develop", c["develop"], height=70)
 c["party"]         = st.sidebar.checkbox("Party member", c.get("party", False))
 c["in_scene"]      = st.sidebar.checkbox("Currently in scene", c.get("in_scene", False))
 
