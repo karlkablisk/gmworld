@@ -219,7 +219,8 @@ else:
     ev = next(e for e in w["events"] if e["name"] == sel_ev)
 ev["name"]  = st.sidebar.text_input("Title", ev["name"])
 ev["scene"] = st.sidebar.text_input("Scene", ev["scene"])
-ev["desc"]  = st.sidebar.text_area("Description", ev["desc"], height=60)
+ev["desc"] = st.sidebar.text_area("Description", str(ev.get("desc") or ""), height=60)
+
 if st.sidebar.button("Save event"):
     if sel_ev == "<new>":
         w["events"].append(ev)
