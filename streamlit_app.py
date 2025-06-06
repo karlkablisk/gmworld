@@ -369,7 +369,8 @@ if st.sidebar.button("Show relationship table", key="show_rel_btn"):
     st.sidebar.dataframe(mat)
 
 # ============================ MAIN ==========================================
-st.title("🎭 GM session")
+#🎭 
+st.title("GM session")
 st.checkbox("Show thoughts", key="show_thoughts")
 
 # Timeline
