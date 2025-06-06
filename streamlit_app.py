@@ -1,6 +1,4 @@
-# rp_ai_chat.py  –  FULL REVISION (adds: thought-log viewer, party system,
-# mass char generation, scene suggestion, import/export, relationship map,
-# Ollama / OpenAI backend switch)
+# rp_ai_chat.py  –  FULL REVISION with all keys fixed!
 # ---------------------------------------------------------------------------
 # ▶ Run with:  streamlit run rp_ai_chat.py
 # ---------------------------------------------------------------------------
@@ -34,8 +32,12 @@ backend = st.sidebar.selectbox("Choose backend", get_backends(), key="backend")
 
 if backend == "openai":
     import openai
-    api_key = st.sidebar.text_input("OpenAI API key", type="password",
-                                    value=st.session_state.get("openai_key", ""))
+    api_key = st.sidebar.text_input(
+        "OpenAI API key", 
+        type="password",
+        value=st.session_state.get("openai_key", ""),
+        key="openai_api_key"
+    )
     if api_key:
         openai.api_key = api_key
         st.session_state.openai_key = api_key
@@ -143,7 +145,7 @@ PERSONALITY_TEMPLATE = load_json(Path(PERSONALITY_FILE), "") \
 # -------- Session Picker & Export / Import ----------------------------------
 st.sidebar.header("🗂 Session")
 sess_files = ["<new>"] + sorted(f.name for f in SESSION_DIR.glob("*.json"))
-sel_sess = st.sidebar.selectbox("Current session", sess_files, key="sess")
+sel_sess = st.sidebar.selectbox("Current session", sess_files, key="sess_selectbox")
 
 def new_session():
     fname = f"session_{datetime.date.today()}_{uuid.uuid4().hex[:6]}.json"
@@ -167,7 +169,7 @@ st.sidebar.write(f"File: {st.session_state.current_session.name}")
 # Export / Import buttons
 exp_col, imp_col = st.sidebar.columns(2)
 with exp_col:
-    if st.button("Export ▶️"):
+    if st.button("Export ▶️", key="export_btn"):
         st.session_state.export_json = json.dumps({
             "world": st.session_state.world,
             "characters": st.session_state.characters,
@@ -180,9 +182,9 @@ with exp_col:
             }
         }, indent=2)
 with imp_col:
-    if st.button("⬅️ Import"):
-        imp_str = st.text_area("Paste JSON to import and click 'Load import'").strip()
-        if imp_str and st.button("Load import"):
+    if st.button("⬅️ Import", key="import_btn"):
+        imp_str = st.text_area("Paste JSON to import and click 'Load import'", key="import_textarea").strip()
+        if imp_str and st.button("Load import", key="load_import_btn"):
             data = json.loads(imp_str)
             st.session_state.world = data.get("world", st.session_state.world)
             st.session_state.characters = data.get("characters", st.session_state.characters)
@@ -197,32 +199,32 @@ with imp_col:
 # ---------- World / GM Settings --------------------------------------------
 st.sidebar.header("🌍 World & GM")
 w = st.session_state.world
-w["prompt"]     = st.sidebar.text_area("World prompt", w["prompt"], height=90)
-w["gm_system"]  = st.sidebar.text_area("GM system prompt", w["gm_system"], height=70)
-w["gm_notes"]   = st.sidebar.text_area("GM notes / plot", w["gm_notes"], height=70)
+w["prompt"]     = st.sidebar.text_area("World prompt", w["prompt"], height=90, key="world_prompt")
+w["gm_system"]  = st.sidebar.text_area("GM system prompt", w["gm_system"], height=70, key="gm_system_prompt")
+w["gm_notes"]   = st.sidebar.text_area("GM notes / plot", w["gm_notes"], height=70, key="gm_notes")
 w["gm_model"]   = st.sidebar.selectbox("GM model", MODELS_CACHE,
                                        index=MODELS_CACHE.index(w["gm_model"])
-                                       if w["gm_model"] in MODELS_CACHE else 0)
+                                       if w["gm_model"] in MODELS_CACHE else 0,
+                                       key="gm_model_select")
 
-if st.sidebar.button("Save World"):
+if st.sidebar.button("Save World", key="save_world_btn"):
     save_json(WORLD_FILE, w)
     st.toast("World saved")
 
 # ------------ Events --------------------------------------------------------
 st.sidebar.subheader("📜 Events")
 ev_names = ["<new>"] + [e["name"] for e in w["events"]]
-sel_ev = st.sidebar.selectbox("Select event", ev_names)
+sel_ev = st.sidebar.selectbox("Select event", ev_names, key="event_selectbox")
 if sel_ev == "<new>":
     ev = {"id": uuid.uuid4().hex, "name": "", "scene": "", "desc": "",
           "time": datetime.datetime.now().isoformat(timespec="seconds")}
 else:
     ev = next(e for e in w["events"] if e["name"] == sel_ev)
-ev["name"]  = st.sidebar.text_input("Title", ev["name"])
-ev["scene"] = st.sidebar.text_input("Scene", ev["scene"])
-ev["desc"] = st.sidebar.text_area("Description", str(ev.get("desc") or ""), height=70)
+ev["name"]  = st.sidebar.text_input("Title", ev["name"], key="event_title")
+ev["scene"] = st.sidebar.text_input("Scene", ev["scene"], key="event_scene")
+ev["desc"]  = st.sidebar.text_area("Description", str(ev.get("desc") or ""), height=70, key="event_desc")
 
-
-if st.sidebar.button("Save event"):
+if st.sidebar.button("Save event", key="save_event_btn"):
     if sel_ev == "<new>":
         w["events"].append(ev)
     save_json(WORLD_FILE, w)
@@ -233,33 +235,34 @@ st.sidebar.header("🎬 Scene")
 scene_names = ["<new>"] + sorted(st.session_state.scenes)
 sel_scene = st.sidebar.selectbox("Active scene", scene_names,
                                  index=scene_names.index(st.session_state.active_scene)
-                                 if st.session_state.active_scene in scene_names else 0)
+                                 if st.session_state.active_scene in scene_names else 0,
+                                 key="scene_selectbox")
 if sel_scene == "<new>":
     scene = {"name": "", "prompt": "", "image": "", "chars": []}
 else:
     scene = st.session_state.scenes[sel_scene].copy()
 
-scene["name"]   = st.sidebar.text_input("Scene name", scene["name"])
-scene["prompt"] = st.sidebar.text_area("Scene description", scene.get("prompt") or "", height=70)
+scene["name"]   = st.sidebar.text_input("Scene name", scene["name"], key="scene_name")
+scene["prompt"] = st.sidebar.text_area("Scene description", scene.get("prompt") or "", height=70, key="scene_prompt")
 
 # Image
-scene["image"]  = st.sidebar.text_input("Image path", scene.get("image", ""))
+scene["image"]  = st.sidebar.text_input("Image path", scene.get("image", ""), key="scene_image_path")
 if scene["image"] and Path(scene["image"]).exists():
     st.sidebar.image(scene["image"], caption="Scene image", use_column_width=True)
-img_prompt = st.sidebar.text_input("Prompt for scene image")
-if st.sidebar.button("Generate scene image"):
+img_prompt = st.sidebar.text_input("Prompt for scene image", key="scene_img_prompt")
+if st.sidebar.button("Generate scene image", key="gen_scene_img_btn"):
     ok = generate_image(img_prompt, scene["image"] or f"{scene['name']}_scene.png")
     st.toast("Generated" if ok else "Failed")
 # Characters in scene
 st.sidebar.write("**Chars in scene**")
 for c in scene["chars"]:
     st.sidebar.write("•", c)
-add_c = st.sidebar.text_input("Add char by name")
-if st.sidebar.button("Add char"):
+add_c = st.sidebar.text_input("Add char by name", key="add_char_by_name")
+if st.sidebar.button("Add char", key="add_char_btn"):
     if add_c and add_c not in scene["chars"]:
         scene["chars"].append(add_c)
 # Mass auto-generate missing chars
-if st.sidebar.button("Auto-generate missing"):
+if st.sidebar.button("Auto-generate missing", key="autogen_chars_btn"):
     missing = [c for c in scene["chars"] if c not in st.session_state.characters]
     for cname in missing:
         quick = f"Create a concise ID sheet for {cname} suitable to the scene {scene['name']}."
@@ -273,14 +276,14 @@ if st.sidebar.button("Auto-generate missing"):
     st.toast(f"Generated {len(missing)} chars")
 
 # Scene suggestion
-if st.sidebar.button("Suggest next scene"):
+if st.sidebar.button("Suggest next scene", key="suggest_scene_btn"):
     sugg = chat_backend(w["gm_model"], [
         {"role": "system", "content": w["gm_system"]},
         {"role": "user", "content": "Suggest a compelling next scene: output as JSON with keys name, prompt, suggested_chars"}
     ], 0.7)
-    st.sidebar.code(sugg, language="json")
+    st.sidebar.code(sugg, language="json", key="scene_suggestion_code")
 
-if st.sidebar.button("Save scene"):
+if st.sidebar.button("Save scene", key="save_scene_btn"):
     st.session_state.scenes[scene["name"]] = scene
     save_json(SCENE_DIR / f"{scene['name']}.json", scene)
     st.session_state.active_scene = scene["name"]
@@ -296,7 +299,7 @@ for cname, c in st.session_state.characters.items():
 # -------------- Character Editor --------------------------------------------
 st.sidebar.header("👥 Characters")
 chars_list = ["<new>"] + sorted(st.session_state.characters)
-sel_char = st.sidebar.selectbox("Edit char", chars_list)
+sel_char = st.sidebar.selectbox("Edit char", chars_list, key="edit_char_selectbox")
 if sel_char == "<new>":
     c = {"name": "", "race": "", "gender": "", "model": MODELS_CACHE[0], "tts": "",
          "personality": "", "prompt_tweak": "", "develop": "", "image": "",
@@ -304,35 +307,36 @@ if sel_char == "<new>":
 else:
     c = st.session_state.characters[sel_char].copy()
 
-c["name"]  = st.sidebar.text_input("Name", c["name"])
-c["race"]  = st.sidebar.text_input("Race", c["race"])
-c["gender"]= st.sidebar.text_input("Gender", c["gender"])
+c["name"]  = st.sidebar.text_input("Name", c["name"], key="char_name")
+c["race"]  = st.sidebar.text_input("Race", c["race"], key="char_race")
+c["gender"]= st.sidebar.text_input("Gender", c["gender"], key="char_gender")
 c["model"] = st.sidebar.selectbox("Model", MODELS_CACHE,
                                   index=MODELS_CACHE.index(c["model"])
-                                  if c["model"] in MODELS_CACHE else 0)
-c["tts"]   = st.sidebar.text_input("TTS voice", c["tts"])
-c["image"] = st.sidebar.text_input("Image path", c.get("image", ""))
+                                  if c["model"] in MODELS_CACHE else 0,
+                                  key="char_model_select")
+c["tts"]   = st.sidebar.text_input("TTS voice", c["tts"], key="char_tts")
+c["image"] = st.sidebar.text_input("Image path", c.get("image", ""), key="char_image_path")
 if c["image"] and Path(c["image"]).exists():
     st.sidebar.image(c["image"], use_column_width=True)
 # Image gen
-img_p = st.sidebar.text_input("Prompt for char image")
-if st.sidebar.button("Generate char image"):
+img_p = st.sidebar.text_input("Prompt for char image", key="char_img_prompt")
+if st.sidebar.button("Generate char image", key="gen_char_img_btn"):
     ok = generate_image(img_p, c["image"] or f"{c['name']}_char.png")
     st.toast("Generated" if ok else "Failed")
-c["personality"]   = st.sidebar.text_area("Personality", c["personality"], height=100)
-c["prompt_tweak"]  = st.sidebar.text_area("Prompt tweak", c["prompt_tweak"], height=70)
-c["develop"]       = st.sidebar.text_area("Develop", c["develop"], height=70)
-c["party"]         = st.sidebar.checkbox("Party member", c.get("party", False))
-c["in_scene"]      = st.sidebar.checkbox("Currently in scene", c.get("in_scene", False))
+c["personality"]   = st.sidebar.text_area("Personality", c["personality"], height=100, key="char_personality")
+c["prompt_tweak"]  = st.sidebar.text_area("Prompt tweak", c["prompt_tweak"], height=70, key="char_prompt_tweak")
+c["develop"]       = st.sidebar.text_area("Develop", c["develop"], height=70, key="char_develop")
+c["party"]         = st.sidebar.checkbox("Party member", c.get("party", False), key="char_party")
+c["in_scene"]      = st.sidebar.checkbox("Currently in scene", c.get("in_scene", False), key="char_in_scene")
 
 # Save / Generate
-if st.sidebar.button("Save char"):
+if st.sidebar.button("Save char", key="save_char_btn"):
     if c["name"]:
         st.session_state.characters[c["name"]] = c
         save_json(CHAR_DIR / f"{c['name']}.json", c)
         st.toast("Saved")
 
-if st.sidebar.button("Generate missing fields"):
+if st.sidebar.button("Generate missing fields", key="gen_missing_fields_btn"):
     seed = textwrap.dedent(f"Name:{c['name']}\nRace:{c['race']}\nGender:{c['gender']}\n{c['prompt_tweak']}")
     result = chat_backend(c["model"], [{"role": "user", "content": seed + "\n\n" + PERSONALITY_TEMPLATE}], 0.3)
     c["personality"] = result
@@ -342,7 +346,7 @@ if st.sidebar.button("Generate missing fields"):
 
 # ----------------- Thought Log & Relationship Viewer ------------------------
 st.sidebar.header("🧠 Thoughts / Relationships")
-sel_view_char = st.sidebar.selectbox("View thoughts of", sorted(st.session_state.characters))
+sel_view_char = st.sidebar.selectbox("View thoughts of", sorted(st.session_state.characters), key="thought_view_selectbox")
 if sel_view_char:
     t_path = CHAR_DIR / f"{sel_view_char}_thoughts.json"
     t_data = load_json(t_path, {"opinions": {}, "events": []})
@@ -354,7 +358,7 @@ if sel_view_char:
         st.sidebar.write(f"**{target}** ➜ {txt.splitlines()[-1][:120]}…")
 
 # Relationship map (simple matrix)
-if st.sidebar.button("Show relationship table"):
+if st.sidebar.button("Show relationship table", key="show_rel_btn"):
     import pandas as pd
     chars = sorted(st.session_state.characters)
     mat = pd.DataFrame("", index=chars, columns=chars)
@@ -387,13 +391,13 @@ for m in st.session_state.chat_log[-200:]:
     st.markdown(f"**{role}**:\n{content}")
 
 # Export TTS
-if st.button("Export TTS"):
+if st.button("Export TTS", key="export_tts_btn"):
     tts_lines = []
     for m in st.session_state.chat_log:
         for l in m["content"].splitlines():
             if l.lower().startswith("speech:"):
                 tts_lines.append(f"{m['role']}: {l.split(':',1)[1].strip()}")
-    st.text_area("TTS", value="\n".join(tts_lines), height=200)
+    st.text_area("TTS", value="\n".join(tts_lines), height=200, key="tts_export_textarea")
 
 # =================== DEVELOPMENT & THOUGHT STORAGE ==========================
 def auto_update_developments(narration: str):
@@ -474,7 +478,7 @@ def run_turn(player_msg: str):
     })
 
 # ================================ INPUT =====================================
-player_input = st.chat_input("Your action / dialogue…")
+player_input = st.chat_input("Your action / dialogue…", key="player_chat_input")
 if player_input is not None:
     run_turn(player_input)
     st.experimental_rerun()
