@@ -1,30 +1,30 @@
-# rp_ai_chat.py  –  sidebar tabs, auto-TTS, world/event generation,
-# backend-aware model lists, unique keys everywhere
-# ---------------------------------------------------------------
-# ▶ streamlit run rp_ai_chat.py
-# ---------------------------------------------------------------
-import os, json, uuid, datetime, textwrap, base64, itertools
+# rp_ai_chat.py — TTS integrated in chat, party/scene sidebar, robust audio
+import os, json, uuid, datetime, textwrap, base64, hashlib
 from pathlib import Path
 import requests
 import streamlit as st
 
-# -------------------- PATHS / CONSTANTS ------------------------
+try:
+    from gtts import gTTS
+    tts_available = True
+    tts_error_reported = False
+except ImportError:
+    tts_available = False
+    tts_error_reported = False
+
 SAVE_ROOT = Path("rp_saves")
 CHAR_DIR, SCENE_DIR, SESSION_DIR = (SAVE_ROOT / p for p in ("characters", "scenes", "sessions"))
 WORLD_FILE = SAVE_ROOT / "world.json"
 PERSONALITY_FILE = "personalityprompt.txt"
-TTS_FILE = SAVE_ROOT / "tts_out.txt"
-
+TTS_CACHE = SAVE_ROOT / "tts_cache"
+TTS_CACHE.mkdir(exist_ok=True)
 OLLAMA_URL = "http://localhost:11434"
 A1111_URL = "http://localhost:7860"
 
-for p in (CHAR_DIR, SCENE_DIR, SESSION_DIR): p.mkdir(parents=True, exist_ok=True)
-SAVE_ROOT.mkdir(exist_ok=True)
+for p in (CHAR_DIR, SCENE_DIR, SESSION_DIR):
+    p.mkdir(parents=True, exist_ok=True)
 
-# -------------------- BACKEND SELECTION ------------------------
-st.sidebar.header("⚙️  Settings")
-backend = st.sidebar.selectbox("AI backend", ["ollama", "openai"], key="backend_select")
-def fetch_models():
+def get_backend_models(backend):
     if backend == "ollama":
         try:
             tags = requests.get(f"{OLLAMA_URL}/api/tags", timeout=8).json()
@@ -32,10 +32,12 @@ def fetch_models():
         except Exception:
             return ["gemma3:latest"]
     else:
-        return ["gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]
-MODELS_CACHE = fetch_models()
+        return ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-micro"]
 
-# OpenAI key if needed
+st.sidebar.header("⚙️ Settings")
+backend = st.sidebar.selectbox("AI backend", ["ollama", "openai"], key="backend_select")
+MODELS_CACHE = get_backend_models(backend)
+
 if backend == "openai":
     import openai
     openai.api_key = st.sidebar.text_input("OpenAI API key", type="password",
@@ -43,7 +45,6 @@ if backend == "openai":
                                            key="openai_key")
     st.session_state.openai_key = openai.api_key
 
-# -------------------- CHAT WRAPPER -----------------------------
 def chat_backend(model: str, messages: list[dict], temp: float = 0.7) -> str:
     if backend == "ollama":
         r = requests.post(f"{OLLAMA_URL}/api/chat",
@@ -55,13 +56,11 @@ def chat_backend(model: str, messages: list[dict], temp: float = 0.7) -> str:
         resp = openai.ChatCompletion.create(model=model, messages=messages, temperature=temp)
         return resp.choices[0].message.content
 
-# -------------------- LOAD / SAVE HELPERS ----------------------
 def load_json(path: Path, default):
     try: return json.loads(path.read_text(encoding="utf-8"))
     except Exception: return default
 def save_json(path: Path, obj): path.write_text(json.dumps(obj,indent=2), encoding="utf-8")
 
-# -------------------- STATE INIT -------------------------------
 if "init" not in st.session_state:
     st.session_state.init=True
     st.session_state.world = load_json(WORLD_FILE, {"prompt":"","gm_system":"","gm_notes":"",
@@ -74,24 +73,19 @@ if "init" not in st.session_state:
     st.session_state.active_scene=None
     st.session_state.player_name="PLAYER"
     st.session_state.show_thoughts=True
+    st.session_state.char_tab_selected = None
 
-# personality template
 PERSONALITY_TEMPLATE = Path(PERSONALITY_FILE).read_text(encoding="utf-8") \
     if Path(PERSONALITY_FILE).exists() else "TEMPLATE NOT FOUND"
 
-# -------------------- TABS LAYOUT (SIDEBAR) --------------------
-tab_settings, tab_world, tab_scene, tab_char, tab_event, tab_thought = st.sidebar.tabs(
-    ["⚙️ Settings", "🌍 World", "🎬 Scene", "👥 Characters", "📜 Events", "🧠 Thoughts"]
-)
-
-#--- char stuff
-with st.sidebar.expander("Party Members", expanded=True):
+# -------------------- PARTY/SCENE SIDEBAR -----------------------
+with st.sidebar.expander("🟢 Party Members", expanded=True):
     party_chars = [c for c in st.session_state.characters.values() if c.get("party")]
     for char in party_chars:
         if st.button(f"{char['name']}", key=f"party_{char['name']}"):
             st.session_state.char_tab_selected = char["name"]
 
-with st.sidebar.expander("Scene Members", expanded=True):
+with st.sidebar.expander("🟡 Scene Members", expanded=True):
     scene_chars = []
     scene_name = st.session_state.active_scene
     if scene_name and scene_name in st.session_state.scenes:
@@ -104,18 +98,18 @@ with st.sidebar.expander("Scene Members", expanded=True):
         if st.button(f"{char['name']}", key=f"scene_{char['name']}"):
             st.session_state.char_tab_selected = char["name"]
 
+tab_settings, tab_world, tab_scene, tab_char, tab_event, tab_thought = st.sidebar.tabs(
+    ["⚙️ Settings", "🌍 World", "🎬 Scene", "👥 Characters", "📜 Events", "🧠 Thoughts"]
+)
 
-# ========== SETTINGS TAB (already holding backend above) =======
 with tab_settings:
     st.checkbox("Show thoughts in chat", key="show_thoughts")
 
-# ========== WORLD TAB ==========================================
 with tab_world:
     w = st.session_state.world
     w["prompt"]    = st.text_area("World prompt", w["prompt"], height=90, key="world_prompt")
     w["gm_system"] = st.text_area("GM system prompt", w["gm_system"], height=70, key="gm_sys")
     w["gm_notes"]  = st.text_area("GM notes / plot", w["gm_notes"], height=70, key="gm_notes")
-    # dynamic model list
     if w["gm_model"] not in MODELS_CACHE: MODELS_CACHE.append(w["gm_model"])
     w["gm_model"]  = st.selectbox("GM model", MODELS_CACHE,
                                   index=MODELS_CACHE.index(w["gm_model"]), key="gm_model")
@@ -134,7 +128,6 @@ with tab_world:
         except Exception:
             st.error("Generation failed")
 
-# ========== SESSION (top of Scene tab) =========================
 def new_session():
     fname=f"session_{datetime.date.today()}_{uuid.uuid4().hex[:6]}.json"
     st.session_state.current_session=SESSION_DIR/fname
@@ -146,7 +139,6 @@ def load_session(fname):
     st.session_state.gm_hist=data["gm_hist"];   st.session_state.char_hist=data["char_hist"]
     st.session_state.current_session=SESSION_DIR/fname
 
-# ========== SCENE TAB ==========================================
 with tab_scene:
     sess_files=["<new>"]+sorted(p.name for p in SESSION_DIR.glob("*.json"))
     sel_sess=st.selectbox("Session file", sess_files, key="sess_file")
@@ -190,20 +182,17 @@ with tab_scene:
         js=chat_backend(w["gm_model"],[{"role":"system","content":w["gm_system"]},
            {"role":"user","content":"Suggest next scene as JSON {name,prompt,chars[]}"}])
         st.code(js,language="json")
-    # update in_scene flags
     for cn,c in st.session_state.characters.items():
         c["in_scene"]=c.get("party") or cn in scene["chars"]
 
-# ========== CHARACTER TAB ======================================
 with tab_char:
-    chars = ["<new>"]+sorted(st.session_state.characters)
     auto_select = st.session_state.get("char_tab_selected")
+    chars = ["<new>"]+sorted(st.session_state.characters)
     if auto_select and auto_select in st.session_state.characters:
         sel = auto_select
         st.session_state.char_tab_selected = None
     else:
-        sel = st.selectbox("Select", ["<new>"] + sorted(st.session_state.characters), key="char_select")
-
+        sel = st.selectbox("Select", chars, key="char_select")
     if sel=="<new>":
         c={"name":"","race":"","gender":"","model":MODELS_CACHE[0],"tts":"","personality":"",
            "prompt_tweak":"","develop":"","image":"","in_scene":False,"party":False}
@@ -235,7 +224,6 @@ with tab_char:
     if cols[2].button("🗑️",help="Delete",key="del_char") and sel!="<new>":
         (CHAR_DIR/f"{sel}.json").unlink(missing_ok=True); st.session_state.characters.pop(sel,None); st.experimental_rerun()
 
-# ========== EVENTS TAB =========================================
 with tab_event:
     ev_names=["<new>"]+[e["name"] for e in w["events"]]
     sel_ev=st.selectbox("Event", ev_names, key="ev_select")
@@ -256,7 +244,6 @@ with tab_event:
     if cols[2].button("🗑️",key="del_ev") and sel_ev!="<new>":
         w["events"]=[e for e in w["events"] if e["id"]!=ev["id"]]; save_json(WORLD_FILE,w); st.experimental_rerun()
 
-# ========== THOUGHTS TAB =======================================
 with tab_thought:
     sel_view=st.selectbox("Character", sorted(st.session_state.characters), key="thought_char_sel")
     tp=CHAR_DIR/f"{sel_view}_thoughts.json"; tdat=load_json(tp,{"opinions":{},"events":[]})
@@ -273,7 +260,33 @@ with tab_thought:
             for tg,tx in op.items(): df.loc[cn,tg]=tx.splitlines()[-1][:40]
         st.dataframe(df)
 
-# -------------------- MAIN AREA (timeline + chat) -------------
+# ------------------ TTS UTILITY -------------------
+def safe_tts(text, speaker):
+    # returns path to .mp3 if successful, else None. Uses gTTS.
+    text = text.strip()
+    if not text: return None
+    fname = f"{speaker}_{hashlib.sha1(text.encode()).hexdigest()[:12]}.mp3"
+    path = TTS_CACHE / fname
+    if path.exists():
+        return path
+    if not tts_available:
+        global tts_error_reported
+        if not tts_error_reported:
+            st.warning("TTS audio engine (gTTS) is not available.")
+            tts_error_reported = True
+        return None
+    try:
+        tts = gTTS(text)
+        tts.save(str(path))
+        return path
+    except Exception as e:
+        global tts_error_reported
+        if not tts_error_reported:
+            st.warning(f"TTS generation error (audio may not play): {e}")
+            tts_error_reported = True
+        return None
+
+# ------------------ MAIN CHAT ---------------------
 st.title("🎭 Modular Role-Play")
 st.subheader(f"Scene ▸ {st.session_state.active_scene or 'None'}")
 for e in reversed(st.session_state.timeline[-50:]):
@@ -287,13 +300,19 @@ for m in st.session_state.chat_log[-200:]:
         content="\n".join(l for l in content.splitlines() if not l.lower().startswith("thought:"))
     img=st.session_state.characters.get(m["role"],{}).get("image","")
     if img and Path(img).exists(): st.image(img,width=50)
-    st.markdown(f"**{m['role']}**:\n{content}")
+    # TTS for narrator and character speech
+    lines = content.splitlines()
+    for line in lines:
+        # Recognize speech lines (Narrator or Character)
+        if m["role"].lower() == "narrator" or line.lower().startswith("speech:"):
+            speaker = m["role"]
+            spoken = line.split(":",1)[1].strip() if line.lower().startswith("speech:") else line.strip()
+            mp3path = safe_tts(spoken, speaker)
+            if mp3path:
+                audio_bytes = mp3path.read_bytes()
+                st.audio(audio_bytes, format="audio/mp3", start_time=0)
+        st.markdown(f"**{m['role']}**: {line}")
 
-# -------------------- TTS STREAM (append lines) ---------------
-def tts_append(line:str):
-    with TTS_FILE.open("a",encoding="utf-8") as f: f.write(line+"\n")
-
-# -------------------- DEV UPDATE / THOUGHT STORAGE ------------
 def store_thought(cn,thought):
     p=CHAR_DIR/f"{cn}_thoughts.json"; d=load_json(p,{"opinions":{},"events":[]})
     if thought.lower().startswith("about "):
@@ -311,14 +330,11 @@ def auto_dev(narr):
             {"role":"user","content":f"Old:\n{c['develop']}\nScene:\n{narr}"}],0.3)
         c["develop"]=(c["develop"]+"\n"+summ).strip()[-800:]; save_json(CHAR_DIR/f"{cn}.json",c)
 
-# -------------------- TURN LOGIC -------------------------------------------
 def run_turn(msg):
     ts=datetime.datetime.now().isoformat(timespec="seconds")
     if msg.strip():
         st.session_state.chat_log.append({"role":st.session_state.player_name,"content":f"Speech: {msg}"})
         st.session_state.timeline.append({"type":"player","actor":st.session_state.player_name,"content":msg,"time":ts})
-        tts_append(f"{st.session_state.player_name}: {msg}")
-
     gm_seq=[
         {"role":"system","content":w["gm_system"]},
         {"role":"system","content":w["prompt"]},
@@ -329,7 +345,6 @@ def run_turn(msg):
     st.session_state.gm_hist.append({"role":"assistant","content":narr})
     st.session_state.chat_log.append({"role":"Narrator","content":narr})
     st.session_state.timeline.append({"type":"narration","actor":"Narrator","content":narr,"time":ts})
-    tts_append(f"Narrator: {narr}")
 
     for cn,c in st.session_state.characters.items():
         if not c.get("in_scene") or cn==st.session_state.player_name: continue
@@ -342,13 +357,26 @@ def run_turn(msg):
         st.session_state.timeline.append({"type":"character","actor":cn,"content":reply,"time":ts})
         for l in reply.splitlines():
             if l.lower().startswith("thought:"): store_thought(cn,l.split(":",1)[1].strip())
-            if l.lower().startswith("speech:"): tts_append(f"{cn}: {l.split(':',1)[1].strip()}")
 
     auto_dev(narr)
     save_json(st.session_state.current_session,{"chat_log":st.session_state.chat_log,
               "timeline":st.session_state.timeline,"gm_hist":st.session_state.gm_hist,
               "char_hist":st.session_state.char_hist})
 
-# -------------------- INPUT -----------------------------------------------
 inp=st.chat_input("Your action / dialogue…", key="user_input")
 if inp is not None: run_turn(inp); st.experimental_rerun()
+
+# ------------- Optional TTS generator for scene/char images ----------------
+def generate_image(prompt: str, save_path: str) -> bool:
+    try:
+        r = requests.post(f"{A1111_URL}/sdapi/v1/txt2img",
+                          json={"prompt": prompt, "steps": 15, "width": 512, "height": 768},
+                          timeout=120)
+        r.raise_for_status()
+        img_b64 = r.json()["images"][0]
+        img_bytes = base64.b64decode(img_b64.split(",", 1)[-1])
+        with open(save_path, "wb") as f:
+            f.write(img_bytes)
+        return True
+    except Exception:
+        return False
