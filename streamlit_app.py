@@ -84,6 +84,27 @@ tab_settings, tab_world, tab_scene, tab_char, tab_event, tab_thought = st.sideba
     ["⚙️ Settings", "🌍 World", "🎬 Scene", "👥 Characters", "📜 Events", "🧠 Thoughts"]
 )
 
+#--- char stuff
+with st.sidebar.expander("Party Members", expanded=True):
+    party_chars = [c for c in st.session_state.characters.values() if c.get("party")]
+    for char in party_chars:
+        if st.button(f"{char['name']}", key=f"party_{char['name']}"):
+            st.session_state.char_tab_selected = char["name"]
+
+with st.sidebar.expander("Scene Members", expanded=True):
+    scene_chars = []
+    scene_name = st.session_state.active_scene
+    if scene_name and scene_name in st.session_state.scenes:
+        sc = st.session_state.scenes[scene_name]
+        for cname in sc.get("chars", []):
+            c = st.session_state.characters.get(cname)
+            if c:
+                scene_chars.append(c)
+    for char in scene_chars:
+        if st.button(f"{char['name']}", key=f"scene_{char['name']}"):
+            st.session_state.char_tab_selected = char["name"]
+
+
 # ========== SETTINGS TAB (already holding backend above) =======
 with tab_settings:
     st.checkbox("Show thoughts in chat", key="show_thoughts")
@@ -176,7 +197,13 @@ with tab_scene:
 # ========== CHARACTER TAB ======================================
 with tab_char:
     chars = ["<new>"]+sorted(st.session_state.characters)
-    sel=st.selectbox("Select", chars, key="char_select")
+    auto_select = st.session_state.get("char_tab_selected")
+    if auto_select and auto_select in st.session_state.characters:
+        sel = auto_select
+        st.session_state.char_tab_selected = None
+    else:
+        sel = st.selectbox("Select", ["<new>"] + sorted(st.session_state.characters), key="char_select")
+
     if sel=="<new>":
         c={"name":"","race":"","gender":"","model":MODELS_CACHE[0],"tts":"","personality":"",
            "prompt_tweak":"","develop":"","image":"","in_scene":False,"party":False}
