@@ -108,12 +108,12 @@ with st.sidebar.expander("🟡 Scene Members", expanded=True):
             st.session_state.char_tab_selected = char["name"]
 
 # ====================== STATE INITIALIZATION ===================
+
 if "init" not in st.session_state:
     st.session_state.init=True
-    st.session_state.world = load_json(WORLD_FILE, {"prompt":"","gm_system":"","gm_notes":"",
-                                                    "gm_model":MODELS_CACHE[0],"events":[],"memory_mode":"objective"})
-    st.session_state.characters = {p.stem: load_json(p,{}) for p in CHAR_DIR.glob("*.json")}
-    st.session_state.scenes     = {p.stem: load_json(p,{}) for p in SCENE_DIR.glob("*.json")}
+    st.session_state.world = load_json(WORLD_FILE, {...})
+    st.session_state.characters = ...
+    st.session_state.scenes = ...
     st.session_state.current_session=None
     st.session_state.chat_log=[]; st.session_state.timeline=[]
     st.session_state.gm_hist=[];  st.session_state.char_hist={}
@@ -121,6 +121,11 @@ if "init" not in st.session_state:
     st.session_state.player_name="PLAYER"
     st.session_state.show_thoughts=True
     st.session_state.char_tab_selected = None
+
+# ENSURE char_tab_selected always exists for tab logic
+if "char_tab_selected" not in st.session_state:
+    st.session_state.char_tab_selected = None
+
 
 # ================ CHARACTER/GM "MIND" MEMORY UTILS ================
 def mind_path(name): return MIND_CACHE / f"{name}_mind.json"
@@ -217,9 +222,94 @@ def safe_tts(text, speaker):
 
 
 # =============== UI: Character Editor ================
+
 tab_settings, tab_world, tab_scene, tab_char, tab_event, tab_thought = st.sidebar.tabs(
     ["⚙️ Settings", "🌍 World", "🎬 Scene", "👥 Characters", "📜 Events", "🧠 Thoughts"]
 )
+
+with tab_settings:
+    st.checkbox("Show thoughts in chat", key="show_thoughts")
+
+with tab_world:
+    w = st.session_state.world
+    w["prompt"]    = st.text_area("World prompt", w["prompt"], height=90, key="world_prompt")
+    w["gm_system"] = st.text_area("GM system prompt", w["gm_system"], height=70, key="gm_sys")
+    w["gm_notes"]  = st.text_area("GM notes / plot", w["gm_notes"], height=70, key="gm_notes")
+    if w["gm_model"] not in MODELS_CACHE: MODELS_CACHE.append(w["gm_model"])
+    w["gm_model"]  = st.selectbox("GM model", MODELS_CACHE,
+                                  index=MODELS_CACHE.index(w["gm_model"]), key="gm_model")
+    cols = st.columns(2)
+    if cols[0].button("💾", help="Save world", key="save_world"):
+        save_json(WORLD_FILE, w); st.toast("World saved")
+    if cols[1].button("✨", help="Generate / fill missing", key="gen_world"):
+        theme = w["prompt"] or "Generate a fresh imaginative setting"
+        filled = chat_backend(w["gm_model"], [{"role":"user","content":
+                 f"Create a concise world prompt, gm system prompt and 3-line gm_notes for: {theme}. "
+                 "Return JSON with keys prompt, gm_system, gm_notes."}],0.5)
+        try:
+            new = json.loads(filled)
+            w.update({k:new.get(k,w[k]) for k in ("prompt","gm_system","gm_notes")})
+            st.toast("World generated")
+        except Exception:
+            st.error("Generation failed")
+
+def new_session():
+    fname=f"session_{datetime.date.today()}_{uuid.uuid4().hex[:6]}.json"
+    st.session_state.current_session=SESSION_DIR/fname
+    st.session_state.chat_log=[]; st.session_state.timeline=[]
+    st.session_state.gm_hist=[]; st.session_state.char_hist={}
+def load_session(fname):
+    data=load_json(SESSION_DIR/fname,{"chat_log":[],"timeline":[],"gm_hist":[],"char_hist":{}})
+    st.session_state.chat_log=data["chat_log"]; st.session_state.timeline=data["timeline"]
+    st.session_state.gm_hist=data["gm_hist"];   st.session_state.char_hist=data["char_hist"]
+    st.session_state.current_session=SESSION_DIR/fname
+
+with tab_scene:
+    sess_files=["<new>"]+sorted(p.name for p in SESSION_DIR.glob("*.json"))
+    sel_sess=st.selectbox("Session file", sess_files, key="sess_file")
+    if sel_sess=="<new>": new_session()
+    else: load_session(sel_sess)
+    scene_names=["<new>"]+sorted(st.session_state.scenes)
+    sel_scene = st.selectbox("Active scene", scene_names, key="scene_select",
+                             index=scene_names.index(st.session_state.active_scene)
+                             if st.session_state.active_scene in scene_names else 0)
+    if sel_scene=="<new>": scene={"name":"","prompt":"","image":"","chars":[]}
+    else: scene=st.session_state.scenes[sel_scene].copy()
+    scene["name"]   = st.text_input("Scene name", scene["name"], key="scene_name")
+    scene["prompt"] = st.text_area("Scene description", scene.get("prompt",""), height=70, key="scene_prompt")
+    scene["image"]  = st.text_input("Image path", scene.get("image",""), key="scene_img")
+    if scene["image"] and Path(scene["image"]).exists(): st.image(scene["image"], use_column_width=True)
+    imgpr = st.text_input("Prompt → generate image", key="scene_imgpr")
+    if st.button("🖼️", key="gen_scene_img", help="Generate scene image"):
+        ok=generate_image(imgpr, scene["image"] or f"{scene['name']}_scene.png")
+        st.toast("OK" if ok else "Fail")
+    st.markdown("**Characters in scene**")
+    for c in scene["chars"]: st.write("•", c)
+    add_c=st.text_input("Add char", key="addchar"); 
+    st.button("➕",key="addchar_btn",help="Add",on_click=lambda: scene["chars"].append(add_c) if add_c and add_c not in scene["chars"] else None)
+    st.button("Auto-generate missing", key="autogen_scene_chars",
+              on_click=lambda: [(
+                  lambda cname: (
+                      save_json(CHAR_DIR/f"{cname}.json",
+                                st.session_state.characters.setdefault(
+                                    cname,{"name":cname,"model":w["gm_model"],
+                                           "personality":chat_backend(w["gm_model"],
+                                           [{"role":"user","content":f'Create a quick sheet for {cname}.'}],0.3),
+                                           "race":"","gender":"","tts":"","prompt_tweak":"",
+                                           "develop":"","image":"","in_scene":True,"party":False})))
+                  )(c) for c in scene["chars"] if c not in st.session_state.characters])
+    cols=st.columns(2)
+    if cols[0].button("💾", key="save_scene"): 
+        st.session_state.scenes[scene["name"]]=scene
+        save_json(SCENE_DIR/f"{scene['name']}.json", scene)
+        st.session_state.active_scene=scene["name"]; st.toast("Scene saved")
+    if cols[1].button("✨", key="suggest_scene", help="AI suggest next scene"):
+        js=chat_backend(w["gm_model"],[{"role":"system","content":w["gm_system"]},
+           {"role":"user","content":"Suggest next scene as JSON {name,prompt,chars[]}"}])
+        st.code(js,language="json")
+    for cn,c in st.session_state.characters.items():
+        c["in_scene"]=c.get("party") or cn in scene["chars"]
+
 with tab_char:
     auto_select = st.session_state.get("char_tab_selected")
     chars = ["<new>"]+sorted(st.session_state.characters)
@@ -230,51 +320,96 @@ with tab_char:
         sel = st.selectbox("Select", chars, key="char_select")
     if sel=="<new>":
         c={"name":"","race":"","gender":"","model":MODELS_CACHE[0],"tts":"","personality":"",
-           "prompt_tweak":"","develop":"","image":"","in_scene":False,"party":False,"memory_mode":"subjective"}
-        mind = load_mind("__NEW__")
-    else:
-        c = st.session_state.characters[sel].copy()
-        mind = load_mind(sel)
+           "prompt_tweak":"","develop":"","image":"","in_scene":False,"party":False}
+    else: c=st.session_state.characters[sel].copy()
     left,right = st.columns(2)
     c["name"]= left.text_input("Name", c["name"], key="char_name")
     c["race"]= left.text_input("Race", c["race"], key="char_race")
     c["gender"]= left.text_input("Gender", c["gender"], key="char_gender")
-    if c.get("model","") not in MODELS_CACHE: MODELS_CACHE.append(c["model"])
+    if c["model"] not in MODELS_CACHE: MODELS_CACHE.append(c["model"])
     c["model"]= left.selectbox("Model", MODELS_CACHE, index=MODELS_CACHE.index(c["model"]), key="char_model")
     c["tts"]= left.text_input("TTS voice", c["tts"], key="char_tts")
     c["party"]= left.checkbox("Party member", c.get("party",False), key="char_party")
-    memmode = left.selectbox("Memory mode", ["subjective","objective"], index=["subjective","objective"].index(c.get("memory_mode","subjective")), key="char_memmode")
-    c["memory_mode"] = memmode
     c["image"]= right.text_input("Image path", c.get("image",""), key="char_imgpath")
     if c["image"] and Path(c["image"]).exists(): right.image(c["image"],use_column_width=True)
-    right.markdown(f"**Token usage:** {mind.get('token_usage','-')} tokens")
-    right.markdown(f"**Memory mode:** {mind.get('memory_mode','subjective')}")
-    right.markdown(f"**Develop:**\n{mind.get('develop','')[-200:]}")
     imgpr_char= right.text_input("Prompt → image", key="char_imgpr")
     if right.button("🖼️", key="gen_char_img"): 
         ok=generate_image(imgpr_char, c["image"] or f"{c['name']}_char.png"); st.toast("OK" if ok else "Fail")
     c["personality"]=st.text_area("Personality", c["personality"], height=100, key="char_pers")
     c["prompt_tweak"]=st.text_area("Prompt tweak", c["prompt_tweak"], height=70, key="char_ptweak")
-    c["develop"]=st.text_area("Develop", c.get("develop",""), height=70, key="char_dev")
+    c["develop"]=st.text_area("Develop", c["develop"], height=70, key="char_dev")
     c["in_scene"]=st.checkbox("In current scene", c.get("in_scene",False), key="char_inscene")
     cols=st.columns(3)
     if cols[0].button("💾", key="save_char"):
-        if c["name"]: save_json(CHAR_DIR/f"{c['name']}.json",c); st.session_state.characters[c["name"]]=c
-        mind["memory_mode"]=c["memory_mode"]
-        save_mind(c["name"], mind)
-        st.toast("Saved")
+        if c["name"]: save_json(CHAR_DIR/f"{c['name']}.json",c); st.session_state.characters[c["name"]]=c; st.toast("Saved")
     if cols[1].button("✨", key="gen_fields", help="Generate/fill"):
         seed=textwrap.dedent(f"Name:{c['name']}\nRace:{c['race']}\nGender:{c['gender']}\n{c['prompt_tweak']}")
         c["personality"]=chat_backend(c["model"],[{"role":"user","content":seed+"\n\n"+PERSONALITY_TEMPLATE}],0.3)
         st.experimental_rerun()
     if cols[2].button("🗑️",help="Delete",key="del_char") and sel!="<new>":
         (CHAR_DIR/f"{sel}.json").unlink(missing_ok=True); st.session_state.characters.pop(sel,None); st.experimental_rerun()
-    st.markdown("---")
-    st.markdown("#### Debug log of everything said")
-    for said in reversed(mind["said_log"][-20:]):
-        st.write(f"{said['time'][11:19]}: {said['text']}")
 
-# ... (rest of the UI, including World/Scene/Events/Thoughts, not shown here for brevity) ...
+with tab_event:
+    ev_names=["<new>"]+[e["name"] for e in w["events"]]
+    sel_ev=st.selectbox("Event", ev_names, key="ev_select")
+    if sel_ev=="<new>": ev={"id":uuid.uuid4().hex,"name":"","scene":"","desc":"",
+                           "time":datetime.datetime.now().isoformat(timespec="seconds")}
+    else: ev=next(e for e in w["events"] if e["name"]==sel_ev)
+    ev["name"]=st.text_input("Title", ev["name"], key="ev_title")
+    ev["scene"]=st.text_input("Scene", ev["scene"], key="ev_scene")
+    ev["desc"]=st.text_area("Description", ev.get("desc",""), height=70, key="ev_desc")
+    cols=st.columns(3)
+    if cols[0].button("💾", key="save_ev"): 
+        if sel_ev=="<new>": w["events"].append(ev)
+        save_json(WORLD_FILE,w); st.toast("Event saved")
+    if cols[1].button("✨", key="gen_ev"):
+        seed=ev["scene"] or w["prompt"] or "Random"
+        filled=chat_backend(w["gm_model"],[{"role":"user","content":f"Write an interesting world event in <70 words for: {seed}. Return only description."}],0.5)
+        ev["desc"]=filled; st.experimental_rerun()
+    if cols[2].button("🗑️",key="del_ev") and sel_ev!="<new>":
+        w["events"]=[e for e in w["events"] if e["id"]!=ev["id"]]; save_json(WORLD_FILE,w); st.experimental_rerun()
+
+with tab_thought:
+    sel_view=st.selectbox("Character", sorted(st.session_state.characters), key="thought_char_sel")
+    tp=CHAR_DIR/f"{sel_view}_thoughts.json"; tdat=load_json(tp,{"opinions":{},"events":[]})
+    st.subheader("Recent thoughts")
+    for e in reversed(tdat["events"][-5:]): st.write(f"- {e['time'][11:16]} {e['text']}")
+    st.subheader("Opinions")
+    for tgt,txt in tdat["opinions"].items(): st.write(f"**{tgt}** ➜ {txt.splitlines()[-1][:100]}…")
+    if st.button("Show relation table", key="show_rel"):
+        import pandas as pd
+        allc=sorted(st.session_state.characters)
+        df=pd.DataFrame("",index=allc,columns=allc)
+        for cn in allc:
+            op=load_json(CHAR_DIR/f"{cn}_thoughts.json",{"opinions":{}})["opinions"]
+            for tg,tx in op.items(): df.loc[cn,tg]=tx.splitlines()[-1][:40]
+        st.dataframe(df)
+
+# ------------------ TTS UTILITY -------------------
+def safe_tts(text, speaker):
+    # returns path to .mp3 if successful, else None. Uses gTTS.
+    text = text.strip()
+    if not text: return None
+    fname = f"{speaker}_{hashlib.sha1(text.encode()).hexdigest()[:12]}.mp3"
+    path = TTS_CACHE / fname
+    if path.exists():
+        return path
+    if not tts_available:
+        global tts_error_reported
+        if not tts_error_reported:
+            st.warning("TTS audio engine (gTTS) is not available.")
+            tts_error_reported = True
+        return None
+    try:
+        tts = gTTS(text)
+        tts.save(str(path))
+        return path
+    except Exception as e:
+        global tts_error_reported
+        if not tts_error_reported:
+            st.warning(f"TTS generation error (audio may not play): {e}")
+            tts_error_reported = True
+        return None
 
 # ========== MAIN CHAT/REPLY, MEMORY & TTS HANDLING ==========
 st.title("🎭 Modular Role-Play")
@@ -369,6 +504,6 @@ def generate_image(prompt: str, save_path: str) -> bool:
         img_bytes = base64.b64decode(img_b64.split(",", 1)[-1])
         with open(save_path, "wb") as f:
             f.write(img_bytes)
-        return True 
+        return True
     except Exception:
         return False
