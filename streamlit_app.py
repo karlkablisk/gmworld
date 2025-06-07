@@ -24,8 +24,13 @@ WORLD_FILE = SAVE_ROOT / "world.json"
 PERSONALITY_FILE = "personalityprompt.txt"
 TTS_CACHE = SAVE_ROOT / "tts_cache"
 MIND_CACHE = SAVE_ROOT / "mind_cache"
-TTS_CACHE.mkdir(exist_ok=True)
-MIND_CACHE.mkdir(exist_ok=True)
+
+# First, create SAVE_ROOT
+SAVE_ROOT.mkdir(exist_ok=True)
+# Then create all subfolders
+for p in (CHAR_DIR, SCENE_DIR, SESSION_DIR, TTS_CACHE, MIND_CACHE):
+    p.mkdir(parents=True, exist_ok=True)
+
 OLLAMA_URL = "http://localhost:11434"
 A1111_URL = "http://localhost:7860"
 
@@ -188,6 +193,7 @@ def update_token_usage(name, mind, model):
 
 # ================ TTS AUDIO UTILITY ================
 def safe_tts(text, speaker):
+    global tts_error_reported
     text = text.strip()
     if not text: return None
     fname = f"{speaker}_{hashlib.sha1(text.encode()).hexdigest()[:12]}.mp3"
@@ -195,7 +201,6 @@ def safe_tts(text, speaker):
     if path.exists():
         return path
     if not tts_available:
-        global tts_error_reported
         if not tts_error_reported:
             st.warning("TTS audio engine (gTTS) is not available.")
             tts_error_reported = True
@@ -205,11 +210,11 @@ def safe_tts(text, speaker):
         tts.save(str(path))
         return path
     except Exception as e:
-        global tts_error_reported
         if not tts_error_reported:
             st.warning(f"TTS generation error (audio may not play): {e}")
             tts_error_reported = True
         return None
+
 
 # =============== UI: Character Editor ================
 tab_settings, tab_world, tab_scene, tab_char, tab_event, tab_thought = st.sidebar.tabs(
@@ -364,6 +369,6 @@ def generate_image(prompt: str, save_path: str) -> bool:
         img_bytes = base64.b64decode(img_b64.split(",", 1)[-1])
         with open(save_path, "wb") as f:
             f.write(img_bytes)
-        return True
+        return True 
     except Exception:
         return False
